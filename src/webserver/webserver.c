@@ -34,6 +34,8 @@
 #include "config/password.h"
 // thread_names
 #include "signals.h"
+// lock_shm(), unlock_shm()
+#include "shmem.h"
 
 #ifdef HAVE_TLS
 #include <openssl/ssl.h>
@@ -1390,10 +1392,20 @@ void http_init(void)
 			log_err("Could not determine the CivetWeb loopback backend port; TLS will not be available");
 			https_port = 0; // TLS is not actually available
 		}
-		else if(!terminator_start(terminator_addr, terminator_port, backend_port, config.webserver.tls.cert.v.s))
+		else
 		{
-			log_err("Failed to start the TLS terminator on port %d", terminator_port);
-			https_port = 0; // TLS is not actually available
+			// The terminator loads the certificate long after this read,
+			// so pass a copy that a concurrent replace_config() cannot free
+			lock_shm();
+			const char *path = config.webserver.tls.cert.v.s;
+			char *cert = path != NULL ? strdup(path) : NULL;
+			unlock_shm();
+			if(cert == NULL || !terminator_start(terminator_addr, terminator_port, backend_port, cert))
+			{
+				log_err("Failed to start the TLS terminator on port %d", terminator_port);
+				https_port = 0; // TLS is not actually available
+			}
+			free(cert);
 		}
 	}
 #endif
